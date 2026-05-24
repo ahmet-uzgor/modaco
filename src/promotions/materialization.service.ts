@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { CacheService } from '../cache/cache.service';
 import { PrismaService } from '../infra/prisma.service';
+import { MetricsService } from '../observability/metrics.service';
 
 const CACHE_INVALIDATE_CHUNK = 1000;
 
@@ -42,9 +43,11 @@ export class MaterializationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cache: CacheService,
+    private readonly metrics: MetricsService,
   ) {}
 
   async applyCategoryPromotion(promotionId: string): Promise<{ affectedProductIds: string[] }> {
+    const stopTimer = this.metrics.materializationDuration.startTimer({ kind: 'apply' });
     const startedAt = Date.now();
 
     const affectedProductIds = await this.prisma.$transaction(async (tx) => {
@@ -99,6 +102,7 @@ export class MaterializationService {
     });
 
     await this.invalidateInBatches(affectedProductIds);
+    stopTimer();
 
     this.logger.log(
       {
@@ -113,6 +117,7 @@ export class MaterializationService {
   }
 
   async revertCategoryPromotion(promotionId: string): Promise<{ affectedProductIds: string[] }> {
+    const stopTimer = this.metrics.materializationDuration.startTimer({ kind: 'revert' });
     const startedAt = Date.now();
 
     const affectedProductIds = await this.prisma.$transaction(async (tx) => {
@@ -140,6 +145,7 @@ export class MaterializationService {
     });
 
     await this.invalidateInBatches(affectedProductIds);
+    stopTimer();
 
     this.logger.log(
       {

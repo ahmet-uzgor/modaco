@@ -1,19 +1,43 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '../infra/redis.service';
+import { MetricsService } from '../observability/metrics.service';
 import { cacheKeys, cacheTtls } from './cache-keys';
+
+const RESOURCE_PRODUCT = 'product';
 
 @Injectable()
 export class CacheService {
   private readonly logger = new Logger(CacheService.name);
 
-  constructor(private readonly redis: RedisService) {}
+  constructor(
+    private readonly redis: RedisService,
+    private readonly metrics: MetricsService,
+  ) {}
+
+  /**
+   * Resource label is best-effort — we infer it from the key prefix. Keeps
+   * counter cardinality bounded to the cache families we actually use.
+   */
+  private resourceFor(key: string): string {
+    if (key.startsWith('product:')) return RESOURCE_PRODUCT;
+    return 'other';
+  }
 
   async getJson<T>(key: string): Promise<T | null> {
+    const resource = this.resourceFor(key);
     const raw = await this.redis.getClient().get(key);
-    if (raw === null) return null;
+    if (raw === null) {
+      this.metrics.cacheOperations.inc({ operation: 'miss', resource });
+      return null;
+    }
     try {
-      return JSON.parse(raw) as T;
+      const value = JSON.parse(raw) as T;
+      this.metrics.cacheOperations.inc({ operation: 'hit', resource });
+      return value;
     } catch (err) {
+      // Counted as a miss for downstream-correctness purposes — the caller
+      // will read from Postgres next.
+      this.metrics.cacheOperations.inc({ operation: 'miss', resource });
       this.logger.warn({ key, err }, 'cache value was not valid JSON; treating as miss');
       return null;
     }
@@ -43,6 +67,10 @@ export class CacheService {
     if (productIds.length === 0) return;
     try {
       await this.del(...productIds.map(cacheKeys.product));
+      this.metrics.cacheOperations.inc(
+        { operation: 'invalidate', resource: RESOURCE_PRODUCT },
+        productIds.length,
+      );
     } catch (err) {
       this.logger.error({ err, count: productIds.length }, 'product cache invalidation failed');
     }

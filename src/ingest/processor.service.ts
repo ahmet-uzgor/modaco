@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../infra/prisma.service';
+import { MetricsService } from '../observability/metrics.service';
 import { PricingRuleViolation, applyPricingRules } from './pricing-rules';
 import { RawIngestRowSchema, type NormalizedIngestRow } from './row.schema';
 
@@ -46,7 +47,10 @@ interface RowResult {
 export class IngestProcessor {
   private readonly logger = new Logger(IngestProcessor.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly metrics: MetricsService,
+  ) {}
 
   async processChunk(batchId: string, rawRows: readonly unknown[]): Promise<ChunkResult> {
     const startedAt = Date.now();
@@ -97,6 +101,9 @@ export class IngestProcessor {
         },
       });
     });
+
+    if (okCount > 0) this.metrics.ingestRows.inc({ status: 'ok' }, okCount);
+    if (failedCount > 0) this.metrics.ingestRows.inc({ status: 'failed' }, failedCount);
 
     this.logger.log(
       {

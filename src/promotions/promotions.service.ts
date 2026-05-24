@@ -10,6 +10,7 @@ import {
 } from '../domain/promotion-rules';
 import { PrismaService } from '../infra/prisma.service';
 import { JobRunner } from '../jobs/job-runner.service';
+import { MetricsService } from '../observability/metrics.service';
 import { MaterializationService } from './materialization.service';
 import {
   presentPromotion,
@@ -34,6 +35,7 @@ export class PromotionsService {
     private readonly cache: CacheService,
     private readonly materialization: MaterializationService,
     private readonly jobs: JobRunner,
+    private readonly metrics: MetricsService,
   ) {}
 
   async getById(id: string): Promise<PromotionPresented> {
@@ -135,6 +137,7 @@ export class PromotionsService {
     });
 
     await this.cache.invalidateProducts([productId]);
+    this.metrics.promotionsCreated.inc({ scope: 'PRODUCT' });
     return presentPromotion(created);
   }
 
@@ -203,6 +206,7 @@ export class PromotionsService {
       });
     }
 
+    this.metrics.promotionsCreated.inc({ scope: 'CATEGORY' });
     return presentPromotion(created);
   }
 

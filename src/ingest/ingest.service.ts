@@ -6,6 +6,7 @@ import { ENV_TOKEN } from '../config/config.module';
 import type { Env } from '../config/env';
 import { PrismaService } from '../infra/prisma.service';
 import { JobRunner } from '../jobs/job-runner.service';
+import { MetricsService } from '../observability/metrics.service';
 import { IngestProcessor } from './processor.service';
 import { IngestSplitter } from './splitter.service';
 import { presentBatch, type IngestBatchPresented, type StartIngestDto } from './ingest.dto';
@@ -40,6 +41,7 @@ export class IngestService {
     private readonly splitter: IngestSplitter,
     private readonly processor: IngestProcessor,
     private readonly jobs: JobRunner,
+    private readonly metrics: MetricsService,
     @Inject(ENV_TOKEN) private readonly env: Env,
   ) {}
 
@@ -69,6 +71,7 @@ export class IngestService {
         status: 'PROCESSING',
       },
     });
+    this.metrics.ingestBatches.inc({ transition: 'started' });
 
     this.jobs.enqueue(`ingest-batch:${created.id}`, async () => {
       await this.runBatch(created.id, filePath);
@@ -113,6 +116,7 @@ export class IngestService {
           finishedAt: new Date(),
         },
       });
+      this.metrics.ingestBatches.inc({ transition: 'completed' });
 
       this.logger.log(
         { batchId, totalRows: result.totalRows, chunks: result.chunkCount },
@@ -128,6 +132,7 @@ export class IngestService {
         .catch((markErr) => {
           this.logger.error({ batchId, err: markErr }, 'failed to record FAILED status');
         });
+      this.metrics.ingestBatches.inc({ transition: 'failed' });
     }
   }
 }
