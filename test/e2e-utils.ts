@@ -14,11 +14,13 @@ import { Logger } from 'nestjs-pino';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
+import { JobRunner } from '../src/jobs/job-runner.service';
 
 export interface E2EContext {
   app: INestApplication;
   prisma: PrismaService;
   redis: RedisService;
+  jobs: JobRunner;
 }
 
 export async function createTestApp(): Promise<E2EContext> {
@@ -32,6 +34,7 @@ export async function createTestApp(): Promise<E2EContext> {
     app,
     prisma: app.get(PrismaService),
     redis: app.get(RedisService),
+    jobs: app.get(JobRunner),
   };
 }
 

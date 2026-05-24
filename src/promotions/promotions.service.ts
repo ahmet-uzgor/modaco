@@ -1,9 +1,4 @@
-import {
-  ConflictException,
-  Injectable,
-  NotFoundException,
-  NotImplementedException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type Promotion } from '@prisma/client';
 import { CacheService } from '../cache/cache.service';
 import { computeEffectivePrice } from '../domain/effective-price';
@@ -14,6 +9,8 @@ import {
   type PromotionLike,
 } from '../domain/promotion-rules';
 import { PrismaService } from '../infra/prisma.service';
+import { JobRunner } from '../jobs/job-runner.service';
+import { MaterializationService } from './materialization.service';
 import {
   presentPromotion,
   type CreatePromotionDto,
@@ -35,6 +32,8 @@ export class PromotionsService {
     private readonly prisma: PrismaService,
     private readonly repo: PromotionsRepository,
     private readonly cache: CacheService,
+    private readonly materialization: MaterializationService,
+    private readonly jobs: JobRunner,
   ) {}
 
   async getById(id: string): Promise<PromotionPresented> {
@@ -48,42 +47,27 @@ export class PromotionsService {
     return rows.map(presentPromotion);
   }
 
-  /**
-   * Phase 3 — PRODUCT-scoped promotion creation only.
-   *
-   * Concurrency (plan §11): we open a transaction and `SELECT … FOR UPDATE`
-   * the target product row. That serializes all concurrent promotion
-   * creations against the same product without blocking unrelated work.
-   *
-   * Inside the lock we:
-   *   1. Load every not-finished promotion already pointing at this product
-   *      (directly via PRODUCT scope, or indirectly via CATEGORY scope on
-   *      the product's category).
-   *   2. Run `detectPromotionConflict` against the candidate window. If any
-   *      live/scheduled promotion overlaps in time, return 409.
-   *   3. Insert the promotion. If it should already be live, also create the
-   *      product_promotions link row, flip status → ACTIVE, and bump the
-   *      product's denormalized active_promotion_id + effective_price.
-   *
-   * CATEGORY scope is intentionally rejected in Phase 3 — materialization
-   * (plan §9 / Phase 4) hasn't been built yet.
-   */
   async create(dto: CreatePromotionDto): Promise<PromotionPresented> {
-    if (dto.scope === 'CATEGORY') {
-      throw new NotImplementedException(
-        'CATEGORY-scoped promotions are wired up in Phase 4 (materialization).',
-      );
+    if (dto.endsAt.getTime() <= Date.now()) {
+      throw new ConflictException('endsAt must be in the future');
     }
+    return dto.scope === 'CATEGORY'
+      ? this.createCategoryPromotion(dto)
+      : this.createProductPromotion(dto);
+  }
 
+  /**
+   * Phase 3 path — PRODUCT-scoped promotion creation.
+   *
+   * Concurrency (plan §11): we open a transaction and SELECT … FOR UPDATE
+   * the target product row. That serializes concurrent promotion creations
+   * against the same product without blocking unrelated work.
+   */
+  private async createProductPromotion(dto: CreatePromotionDto): Promise<PromotionPresented> {
     const productId = dto.targetProductId!;
     const now = new Date();
 
-    if (dto.endsAt.getTime() <= now.getTime()) {
-      throw new ConflictException('endsAt must be in the future');
-    }
-
     const created = await this.prisma.$transaction(async (tx) => {
-      // 1. Row-level lock on the product. Returns one row or none.
       const locked = await tx.$queryRaw<LockedProduct[]>`
         SELECT id, base_price, category_id, active_promotion_id
         FROM products
@@ -93,8 +77,6 @@ export class PromotionsService {
       const product = locked[0];
       if (!product) throw new NotFoundException(`Product ${productId} not found`);
 
-      // 2. Conflict detection. Any not-finished promotion that already
-      //    applies to this product (directly OR via category).
       const existing = await tx.promotion.findMany({
         where: {
           status: { in: ['ACTIVE', 'SCHEDULED'] },
@@ -105,23 +87,15 @@ export class PromotionsService {
         },
       });
 
-      const candidates: PromotionLike[] = existing.map(toPromotionLike);
-      const conflict = detectPromotionConflict(candidates, {
+      const conflict = detectPromotionConflict(existing.map(toPromotionLike), {
         scope: 'PRODUCT',
         startsAt: dto.startsAt,
         endsAt: dto.endsAt,
       });
       if (conflict.conflicts) {
-        throw new ConflictException({
-          error: 'PromotionConflict',
-          reason: conflict.reason,
-          conflictingPromotionId: conflict.conflictingPromotionId,
-          message:
-            'An existing active or scheduled promotion already applies to this product for the requested time window.',
-        });
+        throw new ConflictException(conflictPayload(conflict));
       }
 
-      // 3. Insert the promotion row.
       const initialStatus =
         dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
 
@@ -138,15 +112,10 @@ export class PromotionsService {
         },
       });
 
-      // Always record the (product, promotion) link — this is the
-      // materialized table that Scenario B (Phase 4) leans on.
       await tx.productPromotion.create({
         data: { productId, promotionId: promo.id },
       });
 
-      // If the promotion is already live, push it through to the product's
-      // denormalized read-view fields. The PRODUCT-scope precedence rule
-      // means this beats any live CATEGORY promotion automatically.
       if (initialStatus === 'ACTIVE') {
         const effective = computeEffectivePrice(product.base_price.toString(), {
           discountType: promo.discountType,
@@ -165,38 +134,102 @@ export class PromotionsService {
       return promo;
     });
 
-    // Cache invalidation runs AFTER commit. Logged on failure, never thrown.
     await this.cache.invalidateProducts([productId]);
     return presentPromotion(created);
   }
 
   /**
-   * Cancel a promotion. Sets status=CANCELLED and, for every product whose
-   * `active_promotion_id` was this one, re-evaluates the read-view: pick the
-   * next winner among remaining live promotions, or fall back to base_price.
+   * Phase 4 path — CATEGORY-scoped promotion creation. Returns immediately
+   * (the controller renders 202 Accepted) and hands the heavy bulk SQL off
+   * to MaterializationService via JobRunner.
    *
-   * The query is generic over scope — Phase 4's bulk-affected category
-   * promotion will exercise the multi-product path. In Phase 3 it'll be at
-   * most one product per cancellation.
+   * Concurrency: advisory lock on the category prevents two overlapping
+   * category promotions from being inserted at the same time. The conflict
+   * check then guards against logical overlap.
    */
+  private async createCategoryPromotion(dto: CreatePromotionDto): Promise<PromotionPresented> {
+    const categoryId = dto.targetCategoryId!;
+    const now = new Date();
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${`category:${categoryId}`}))
+      `;
+
+      const category = await tx.category.findUnique({ where: { id: categoryId } });
+      if (!category) throw new NotFoundException(`Category ${categoryId} not found`);
+
+      const existing = await tx.promotion.findMany({
+        where: {
+          scope: 'CATEGORY',
+          targetCategoryId: categoryId,
+          status: { in: ['ACTIVE', 'SCHEDULED'] },
+        },
+      });
+
+      const conflict = detectPromotionConflict(existing.map(toPromotionLike), {
+        scope: 'CATEGORY',
+        startsAt: dto.startsAt,
+        endsAt: dto.endsAt,
+      });
+      if (conflict.conflicts) {
+        throw new ConflictException(conflictPayload(conflict));
+      }
+
+      const initialStatus =
+        dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
+
+      return tx.promotion.create({
+        data: {
+          name: dto.name,
+          discountType: dto.discountType,
+          discountValue: new Prisma.Decimal(dto.discountValue),
+          scope: 'CATEGORY',
+          targetCategoryId: categoryId,
+          startsAt: dto.startsAt,
+          endsAt: dto.endsAt,
+          status: initialStatus,
+        },
+      });
+    });
+
+    // Materialization is the heavy bulk SQL — runs in background. Only fire
+    // it for promotions that are live RIGHT NOW. Scheduled-future promos
+    // would need a wake-up trigger at startsAt; out of scope for the case
+    // study (documented in ADR).
+    if (created.status === 'ACTIVE') {
+      this.jobs.enqueue(`apply-category:${created.id}`, async () => {
+        await this.materialization.applyCategoryPromotion(created.id);
+      });
+    }
+
+    return presentPromotion(created);
+  }
+
   async cancel(id: string): Promise<PromotionPresented> {
+    const promo = await this.repo.findById(id);
+    if (!promo) throw new NotFoundException(`Promotion ${id} not found`);
+    if (promo.status === 'CANCELLED') {
+      throw new ConflictException('Promotion is already cancelled');
+    }
+    return promo.scope === 'CATEGORY' ? this.cancelCategory(id) : this.cancelProduct(id);
+  }
+
+  /**
+   * PRODUCT-scope cancel: at most one product to revisit, so we re-evaluate
+   * the precedence rule against any remaining live promotions and write the
+   * next state in the same transaction.
+   */
+  private async cancelProduct(id: string): Promise<PromotionPresented> {
     const now = new Date();
     const affectedProductIds: string[] = [];
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const promo = await tx.promotion.findUnique({ where: { id } });
-      if (!promo) throw new NotFoundException(`Promotion ${id} not found`);
-      if (promo.status === 'CANCELLED') {
-        throw new ConflictException('Promotion is already cancelled');
-      }
-
       const cancelled = await tx.promotion.update({
         where: { id },
         data: { status: 'CANCELLED' },
       });
 
-      // Find every product currently pointing at this promotion. Lock them
-      // for update so concurrent reads can't race against our recompute.
       const products = await tx.$queryRaw<LockedProduct[]>`
         SELECT id, base_price, category_id, active_promotion_id
         FROM products
@@ -207,7 +240,6 @@ export class PromotionsService {
       for (const product of products) {
         affectedProductIds.push(product.id);
 
-        // Re-evaluate the precedence rule on what's still live.
         const remaining = await tx.promotion.findMany({
           where: {
             id: { not: id },
@@ -254,6 +286,22 @@ export class PromotionsService {
     }
     return presentPromotion(updated);
   }
+
+  /**
+   * CATEGORY-scope cancel: flips the status row and hands off to
+   * MaterializationService for the bulk UPDATE. Done synchronously so the
+   * HTTP response is only sent once products reflect the revert — for the
+   * case-study scale (1k–50k products) the bulk SQL stays well under a
+   * second, and immediate consistency is more useful than another 202.
+   */
+  private async cancelCategory(id: string): Promise<PromotionPresented> {
+    const cancelled = await this.prisma.promotion.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+    });
+    await this.materialization.revertCategoryPromotion(id);
+    return presentPromotion(cancelled);
+  }
 }
 
 function toPromotionLike(p: Promotion): PromotionLike {
@@ -264,5 +312,18 @@ function toPromotionLike(p: Promotion): PromotionLike {
     startsAt: p.startsAt,
     endsAt: p.endsAt,
     createdAt: p.createdAt,
+  };
+}
+
+function conflictPayload(conflict: {
+  reason: string;
+  conflictingPromotionId: string;
+}): Record<string, unknown> {
+  return {
+    error: 'PromotionConflict',
+    reason: conflict.reason,
+    conflictingPromotionId: conflict.conflictingPromotionId,
+    message:
+      'An existing active or scheduled promotion already applies to this target for the requested time window.',
   };
 }

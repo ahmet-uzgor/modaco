@@ -26,15 +26,21 @@ describe('Promotion conflict rule (e2e)', () => {
   });
 
   afterAll(async () => {
-    // app.close() triggers onModuleDestroy on PrismaService and RedisService,
-    // which in turn disconnect both clients. Doing it manually too leads to
-    // double-quit warnings from ioredis.
+    // Drain pending JobRunner work BEFORE closing — Prisma's onModuleDestroy
+    // can otherwise win the race and disconnect mid-job.
+    await ctx.jobs.flush();
     await app.close();
   });
 
   beforeEach(async () => {
     await resetDatabase(ctx.prisma);
     await resetRedis(ctx.redis);
+  });
+
+  afterEach(async () => {
+    // Make sure any background materialization spawned by a test settles
+    // against this test's connection state before the next test resets.
+    await ctx.jobs.flush();
   });
 
   async function seedCategoryAndProduct(): Promise<{ categoryId: string; productId: string }> {
@@ -179,13 +185,13 @@ describe('Promotion conflict rule (e2e)', () => {
     expect(statuses).toEqual([201, 409]);
   });
 
-  it('rejects CATEGORY-scope creation in Phase 3 (501)', async () => {
+  it('accepts CATEGORY-scope creation with 202 (full materialization covered in Scenario B test)', async () => {
     const cat = await request(app.getHttpServer())
       .post(ROUTE.category)
-      .send({ name: 'Phase3' })
+      .send({ name: 'Phase4' })
       .expect(201);
 
-    await request(app.getHttpServer())
+    const res = await request(app.getHttpServer())
       .post(ROUTE.promo)
       .send({
         name: 'Site-wide',
@@ -196,6 +202,9 @@ describe('Promotion conflict rule (e2e)', () => {
         startsAt: new Date(Date.now() - 60_000).toISOString(),
         endsAt: new Date(Date.now() + 60 * 60_000).toISOString(),
       })
-      .expect(501);
+      .expect(202);
+
+    expect(res.body.scope).toBe('CATEGORY');
+    expect(res.body.status).toBe('ACTIVE');
   });
 });

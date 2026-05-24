@@ -7,7 +7,9 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ZodValidationPipe } from '../shared/zod-validation.pipe';
 import {
   CreatePromotionSchema,
@@ -34,12 +36,23 @@ export class PromotionsController {
     return this.service.getById(id);
   }
 
+  /**
+   * Status code depends on scope (plan §9):
+   *   - PRODUCT  → 201 Created. Effective price has already been written to
+   *                the single target product inside the create transaction.
+   *   - CATEGORY → 202 Accepted. The promotion row is committed, but the
+   *                materialization across N products runs asynchronously
+   *                via JobRunner. Clients poll product detail (or watch
+   *                /api/v1/promotions/:id) to observe completion.
+   */
   @Post()
-  @HttpCode(201)
-  create(
+  async create(
     @Body(new ZodValidationPipe(CreatePromotionSchema)) body: CreatePromotionDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<PromotionPresented> {
-    return this.service.create(body);
+    const promotion = await this.service.create(body);
+    res.status(body.scope === 'CATEGORY' ? 202 : 201);
+    return promotion;
   }
 
   @Post(':id/cancel')
