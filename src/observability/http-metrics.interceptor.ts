@@ -1,9 +1,4 @@
-import {
-  CallHandler,
-  ExecutionContext,
-  Injectable,
-  type NestInterceptor,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, type NestInterceptor } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { catchError, Observable, tap, throwError } from 'rxjs';
 import { MetricsService } from './metrics.service';

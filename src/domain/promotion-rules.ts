@@ -123,8 +123,7 @@ export function detectPromotionConflict(
     if (!windowsOverlap(e, candidate)) continue;
     return {
       conflicts: true,
-      reason:
-        e.scope === 'PRODUCT' ? 'EXISTING_PRODUCT_PROMOTION' : 'EXISTING_CATEGORY_PROMOTION',
+      reason: e.scope === 'PRODUCT' ? 'EXISTING_PRODUCT_PROMOTION' : 'EXISTING_CATEGORY_PROMOTION',
       conflictingPromotionId: e.id,
     };
   }

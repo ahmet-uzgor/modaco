@@ -132,9 +132,7 @@ describe('Promotion conflict rule (e2e)', () => {
       })
       .expect(201);
 
-    await request(app.getHttpServer())
-      .post(`${ROUTE.promo}/${first.body.id}/cancel`)
-      .expect(200);
+    await request(app.getHttpServer()).post(`${ROUTE.promo}/${first.body.id}/cancel`).expect(200);
 
     // After cancellation, effective_price returns to the base price and the
     // product no longer holds an active promotion id.

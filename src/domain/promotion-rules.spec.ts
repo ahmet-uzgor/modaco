@@ -11,7 +11,9 @@ const T1 = new Date('2026-01-02T00:00:00Z');
 const T2 = new Date('2026-01-03T00:00:00Z');
 const T3 = new Date('2026-01-04T00:00:00Z');
 
-function promo(overrides: Partial<PromotionLike> & Pick<PromotionLike, 'id' | 'scope'>): PromotionLike {
+function promo(
+  overrides: Partial<PromotionLike> & Pick<PromotionLike, 'id' | 'scope'>,
+): PromotionLike {
   return {
     status: 'ACTIVE',
     startsAt: T0,
@@ -65,19 +67,13 @@ describe('windowsOverlap()', () => {
 describe('pickWinningPromotion() — precedence', () => {
   it('returns null when no candidates are live', () => {
     expect(
-      pickWinningPromotion(
-        [promo({ id: 'a', scope: 'PRODUCT', status: 'CANCELLED' })],
-        T1,
-      ),
+      pickWinningPromotion([promo({ id: 'a', scope: 'PRODUCT', status: 'CANCELLED' })], T1),
     ).toBeNull();
   });
 
   it('PRODUCT scope outranks CATEGORY scope when both are live', () => {
     const winner = pickWinningPromotion(
-      [
-        promo({ id: 'category', scope: 'CATEGORY' }),
-        promo({ id: 'product', scope: 'PRODUCT' }),
-      ],
+      [promo({ id: 'category', scope: 'CATEGORY' }), promo({ id: 'product', scope: 'PRODUCT' })],
       T1,
     );
     expect(winner?.id).toBe('product');
@@ -105,9 +101,9 @@ describe('detectPromotionConflict()', () => {
   });
 
   it('reports no conflict against an empty existing set', () => {
-    expect(
-      detectPromotionConflict([], { scope: 'PRODUCT', startsAt: T0, endsAt: T1 }),
-    ).toEqual({ conflicts: false });
+    expect(detectPromotionConflict([], { scope: 'PRODUCT', startsAt: T0, endsAt: T1 })).toEqual({
+      conflicts: false,
+    });
   });
 
   it('flags overlap with an existing PRODUCT-scoped promotion', () => {
@@ -146,7 +142,13 @@ describe('detectPromotionConflict()', () => {
     expect(
       detectPromotionConflict(
         [
-          promo({ id: 'cancelled', scope: 'PRODUCT', status: 'CANCELLED', startsAt: T1, endsAt: T3 }),
+          promo({
+            id: 'cancelled',
+            scope: 'PRODUCT',
+            status: 'CANCELLED',
+            startsAt: T1,
+            endsAt: T3,
+          }),
           promo({ id: 'expired', scope: 'PRODUCT', status: 'EXPIRED', startsAt: T1, endsAt: T3 }),
         ],
         { scope: 'PRODUCT', startsAt: T1, endsAt: T2 },

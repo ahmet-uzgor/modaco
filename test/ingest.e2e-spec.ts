@@ -65,9 +65,7 @@ describe('Ingest pipeline (e2e)', () => {
 
   async function waitForCompletion(batchId: string): Promise<unknown> {
     await ctx.jobs.flush();
-    const res = await request(app.getHttpServer())
-      .get(`${ROUTE.ingest}/${batchId}`)
-      .expect(200);
+    const res = await request(app.getHttpServer()).get(`${ROUTE.ingest}/${batchId}`).expect(200);
     return res.body;
   }
 

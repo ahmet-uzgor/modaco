@@ -98,8 +98,7 @@ export class PromotionsService {
         throw new ConflictException(conflictPayload(conflict));
       }
 
-      const initialStatus =
-        dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
+      const initialStatus = dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
 
       const promo = await tx.promotion.create({
         data: {
@@ -179,8 +178,7 @@ export class PromotionsService {
         throw new ConflictException(conflictPayload(conflict));
       }
 
-      const initialStatus =
-        dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
+      const initialStatus = dto.startsAt.getTime() <= now.getTime() ? 'ACTIVE' : 'SCHEDULED';
 
       return tx.promotion.create({
         data: {

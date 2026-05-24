@@ -47,9 +47,7 @@ export class ProductsRepository {
     const data = hasMore ? rows.slice(0, q.limit) : rows;
     const last = data[data.length - 1];
     const nextCursor =
-      hasMore && last
-        ? encodeCursor(stringifySortValue(sortField, last), last.id)
-        : null;
+      hasMore && last ? encodeCursor(stringifySortValue(sortField, last), last.id) : null;
 
     return { data, nextCursor };
   }
@@ -75,9 +73,6 @@ function buildKeysetClause(
   return { OR: [sortClause, tieClause] };
 }
 
-function stringifySortValue(
-  sortField: 'name' | 'effectivePrice',
-  product: Product,
-): string {
+function stringifySortValue(sortField: 'name' | 'effectivePrice', product: Product): string {
   return sortField === 'name' ? product.name : product.effectivePrice.toString();
 }

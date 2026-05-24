@@ -1,18 +1,6 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Param,
-  ParseUUIDPipe,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { ZodValidationPipe } from '../shared/zod-validation.pipe';
-import {
-  StartIngestSchema,
-  type IngestBatchPresented,
-  type StartIngestDto,
-} from './ingest.dto';
+import { StartIngestSchema, type IngestBatchPresented, type StartIngestDto } from './ingest.dto';
 import { IngestService } from './ingest.service';
 
 @Controller('ingest/batches')

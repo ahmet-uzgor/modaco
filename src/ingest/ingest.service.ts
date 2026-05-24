@@ -100,13 +100,9 @@ export class IngestService {
   private async runBatch(batchId: string, filePath: string): Promise<void> {
     try {
       const stream = createReadStream(filePath, { encoding: 'utf8' });
-      const result = await this.splitter.split(
-        stream,
-        this.env.INGEST_CHUNK_SIZE,
-        async (rows) => {
-          await this.processor.processChunk(batchId, rows);
-        },
-      );
+      const result = await this.splitter.split(stream, this.env.INGEST_CHUNK_SIZE, async (rows) => {
+        await this.processor.processChunk(batchId, rows);
+      });
 
       await this.prisma.ingestBatch.update({
         where: { id: batchId },

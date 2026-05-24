@@ -7,10 +7,7 @@ import { MetricsService } from './metrics.service';
 @Global()
 @Module({
   controllers: [MetricsController],
-  providers: [
-    MetricsService,
-    { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor },
-  ],
+  providers: [MetricsService, { provide: APP_INTERCEPTOR, useClass: HttpMetricsInterceptor }],
   exports: [MetricsService],
 })
 export class ObservabilityModule {}
