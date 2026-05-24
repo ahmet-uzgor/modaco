@@ -271,6 +271,92 @@ sku,name,category_name,base_price,vendor_cost,stock_quantity
 (`base_price ≥ vendor_cost × 1.10`). Rows below that floor are lifted
 up, not rejected.
 
+#### Production deployment shape (AWS Lambda + S3 + SQS)
+
+The local `POST /api/v1/ingest/batches` endpoint runs the splitter and
+processor in-process via `JobRunner`. The plan's intended production
+deployment is two Lambda handlers, checked in under
+[src/ingest/splitter.handler.ts](src/ingest/splitter.handler.ts) and
+[src/ingest/processor.handler.ts](src/ingest/processor.handler.ts):
+
+```
+   vendor CSV  ─▶  S3 raw/{vendor}/file.csv
+                              │  ObjectCreated event
+                              ▼
+                  splitter.handler  (S3Handler)
+                  • streams the CSV via IngestSplitter
+                  • writes each chunk to S3 chunks/{batch}/{i}.jsonl
+                  • SQS SendMessage  { batchId, chunkKey, chunkIndex }
+                              │
+                              ▼
+                          ┌───────┐
+                          │  SQS  │
+                          └───┬───┘
+                              │
+                              ▼
+                  processor.handler  (SQSHandler)
+                  • GetObject the chunk JSONL
+                  • IngestProcessor.processChunk(batchId, rows)
+                  • SQSBatchResponse.batchItemFailures for retries
+```
+
+Both handlers cache a Nest application context across warm
+invocations and call the **same** pure services the local endpoint
+uses, so idempotency (UNIQUE `(vendor_id, source_file)` on
+`ingest_batches`, PK `(batch_id, row_key)` on `ingest_row_results`,
+`ON CONFLICT (sku) DO UPDATE` on `products`) is identical between
+deployment modes.
+
+The S3 and SQS SDK calls are marked `TODO(production)` inside both
+handlers — deploying them adds `@aws-sdk/client-s3` and
+`@aws-sdk/client-sqs` and replaces the stubs. The handlers throw
+loudly (`'... wire @aws-sdk/client-s3 before deploying'`) if anyone
+deploys without that wiring.
+
+## Dev helper scripts
+
+Two ts-node scripts under `scripts/`:
+
+```bash
+# Seed: 3 categories + 7 sample products, upserted by natural key
+# so subsequent runs are no-ops.
+npm run db:seed
+
+# Generate a synthetic vendor CSV under INGEST_DIR (default 500_000 rows).
+# First arg = row count, second arg = filename.
+npm run ingest:gen                              # 500k rows
+npm run ingest:gen -- 100000                    # 100k rows
+npm run ingest:gen -- 50000 my-feed.csv         # custom filename
+```
+
+### Stress-testing Scenario A end-to-end
+
+```bash
+# 1. Bring up Postgres + Redis and the API.
+npm run db:up && npm run start:dev
+
+# 2. In another terminal, generate a 500k-row vendor feed.
+npm run ingest:gen -- 500000 stress.csv
+
+# 3. Kick off the ingest. 202 with the batch UUID.
+curl -X POST http://localhost:3000/api/v1/ingest/batches \
+  -H 'content-type: application/json' \
+  -d '{"vendorId":"stress","sourceFile":"stress.csv"}'
+
+# 4. Poll progress.
+watch -n 1 'curl -s http://localhost:3000/api/v1/ingest/batches/<batch-uuid>'
+
+# 5. Read the metrics — ingest counters, rows/sec, batch transitions.
+curl -s http://localhost:3000/metrics | grep ingest_
+```
+
+The streaming splitter keeps process memory bounded to ~one chunk's
+worth of rows (default 500); the processor bulk-upserts one chunk
+per SQL statement. Scenario A's design assumption — that this
+pipeline finishes inside a Lambda's 15-minute budget — is what this
+script lets you verify against your own hardware before the
+interview.
+
 ## Project structure
 
 ```
@@ -303,10 +389,18 @@ test/
 ├── scenario-b.e2e-spec.ts     # 1000-product materialization
 ├── ingest.e2e-spec.ts
 └── metrics.e2e-spec.ts
+scripts/
+├── seed.ts                    # Categories + sample products (idempotent)
+└── generate-large-csv.ts      # Streams a synthetic vendor CSV under INGEST_DIR
 docker-compose.yml             # postgres:15-alpine + redis:7-alpine
 ADR.md                         # Architecture Decision Record
 AI_APPENDIX.md                 # AI collaboration appendix (form 5)
 ```
+
+The `ingest/` module also ships AWS Lambda handler stubs
+(`splitter.handler.ts`, `processor.handler.ts`) for the production
+deployment shape — see the "Production deployment shape" subsection
+above.
 
 ## Observability
 
