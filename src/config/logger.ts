@@ -15,7 +15,8 @@ export function buildLoggerOptions(env: Env): Params {
       },
       customProps: () => ({ service: 'modaco-promotion-api' }),
       autoLogging: {
-        ignore: (req) => req.url === '/health' || req.url === '/ready',
+        ignore: (req) =>
+          req.url === '/health' || req.url === '/ready' || req.url === '/metrics',
       },
       serializers: {
         req: (req) => ({

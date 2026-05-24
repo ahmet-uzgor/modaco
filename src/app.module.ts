@@ -10,6 +10,7 @@ import { IngestModule } from './ingest/ingest.module';
 import { PrismaModule } from './infra/prisma.module';
 import { RedisModule } from './infra/redis.module';
 import { JobsModule } from './jobs/jobs.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { ProductsModule } from './products/products.module';
 import { PromotionsModule } from './promotions/promotions.module';
 
@@ -21,6 +22,7 @@ import { PromotionsModule } from './promotions/promotions.module';
     RedisModule,
     CacheModule,
     JobsModule,
+    ObservabilityModule,
     HealthModule,
     CategoriesModule,
     ProductsModule,

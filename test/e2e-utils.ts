@@ -27,7 +27,7 @@ export async function createTestApp(): Promise<E2EContext> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication({ bufferLogs: true });
   app.useLogger(app.get(Logger));
-  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] });
+  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready', 'metrics'] });
   // Validation is per-route via ZodValidationPipe; no global pipe needed.
   await app.init();
   return {

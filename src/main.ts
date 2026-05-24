@@ -7,7 +7,7 @@ async function bootstrap(): Promise<void> {
   const env = loadEnv();
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
-  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] });
+  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready', 'metrics'] });
   app.enableShutdownHooks();
 
   await app.listen(env.PORT);
