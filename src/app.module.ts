@@ -6,6 +6,7 @@ import { ConfigModule } from './config/config.module';
 import { loadEnv } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 import { HealthModule } from './health/health.module';
+import { IngestModule } from './ingest/ingest.module';
 import { PrismaModule } from './infra/prisma.module';
 import { RedisModule } from './infra/redis.module';
 import { JobsModule } from './jobs/jobs.module';
@@ -24,6 +25,7 @@ import { PromotionsModule } from './promotions/promotions.module';
     CategoriesModule,
     ProductsModule,
     PromotionsModule,
+    IngestModule,
   ],
 })
 export class AppModule {}
