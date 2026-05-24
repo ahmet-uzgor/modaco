@@ -198,11 +198,15 @@ export class IngestProcessor {
     const batchIds = results.map(() => batchId);
     const rowKeys = results.map((r) => r.rowKey);
     const statuses = results.map((r) => r.status);
-    const errors = results.map((r) => r.errorMessage);
+    // Empty-string sentinel: Prisma's parameter binding for text[] mishandles
+    // arrays that mix null and string ("improper binary format"). We
+    // round-trip null as '' through the array and convert back via NULLIF
+    // before the INSERT actually lands.
+    const errors = results.map((r) => r.errorMessage ?? '');
 
     await tx.$executeRaw`
       INSERT INTO ingest_row_results (batch_id, row_key, status, error_message, processed_at)
-      SELECT batch_id::uuid, row_key, status, error_message, now()
+      SELECT batch_id::uuid, row_key, status, NULLIF(error_message, '') AS error_message, now()
       FROM UNNEST(
         ${batchIds}::text[],
         ${rowKeys}::text[],
