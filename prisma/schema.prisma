@@ -89,8 +89,9 @@ model Promotion {
   activeOnProducts Product[]          @relation("ActivePromotion")
   productLinks     ProductPromotion[]
 
-  // Partial indexes (status filter + target_category not null) added in migration SQL.
-  @@index([status, startsAt, endsAt], map: "idx_promotions_status_window")
+  // Partial indexes are defined in the init migration's raw SQL
+  // (idx_promotions_active_window, idx_promotions_target_category) because
+  // Prisma's DSL can't express WHERE clauses on indexes.
   @@map("promotions")
 }
 

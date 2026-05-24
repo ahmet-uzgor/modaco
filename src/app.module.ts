@@ -8,6 +8,7 @@ import { buildLoggerOptions } from './config/logger';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './infra/prisma.module';
 import { RedisModule } from './infra/redis.module';
+import { JobsModule } from './jobs/jobs.module';
 import { ProductsModule } from './products/products.module';
 import { PromotionsModule } from './promotions/promotions.module';
 
@@ -18,6 +19,7 @@ import { PromotionsModule } from './promotions/promotions.module';
     PrismaModule,
     RedisModule,
     CacheModule,
+    JobsModule,
     HealthModule,
     CategoriesModule,
     ProductsModule,
