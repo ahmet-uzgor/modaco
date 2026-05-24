@@ -20,7 +20,9 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "db:up": "docker compose up -d postgres redis",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "db:seed": "ts-node scripts/seed.ts",
+    "ingest:gen": "ts-node scripts/generate-large-csv.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.4",
