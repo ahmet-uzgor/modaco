@@ -1,0 +1,138 @@
+// ModaCo Promotion Management API — Prisma schema
+// Mirrors the DDL in modaco-implementation-plan.md §5.
+// Partial indexes and CHECK constraints that Prisma's DSL can't express are
+// added via raw SQL in the migration file (see migrations/<ts>_init/migration.sql).
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = []
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum PromotionScope {
+  PRODUCT
+  CATEGORY
+}
+
+enum PromotionStatus {
+  SCHEDULED
+  ACTIVE
+  CANCELLED
+  EXPIRED
+}
+
+model Category {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  products   Product[]
+  promotions Promotion[] @relation("CategoryPromotions")
+
+  @@map("categories")
+}
+
+model Product {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sku            String  @unique
+  name           String
+  categoryId     String  @map("category_id") @db.Uuid
+  basePrice      Decimal @map("base_price") @db.Decimal(12, 2)
+  stockQuantity  Int     @map("stock_quantity")
+
+  // Denormalized read-view fields (see plan §2, §6)
+  activePromotionId        String?  @map("active_promotion_id") @db.Uuid
+  effectivePrice           Decimal  @map("effective_price") @db.Decimal(12, 2)
+  effectivePriceUpdatedAt  DateTime @default(now()) @map("effective_price_updated_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  category         Category           @relation(fields: [categoryId], references: [id])
+  activePromotion  Promotion?         @relation("ActivePromotion", fields: [activePromotionId], references: [id])
+  productPromos    ProductPromotion[]
+  productPromotions Promotion[]       @relation("ProductPromotions")
+
+  // Standard indexes — partial index on active_promotion_id added in migration SQL.
+  @@index([categoryId, effectivePrice], map: "idx_products_category_effective_price")
+  @@index([effectivePrice], map: "idx_products_effective_price")
+  @@map("products")
+}
+
+model Promotion {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  discountType      DiscountType    @map("discount_type")
+  discountValue     Decimal         @map("discount_value") @db.Decimal(12, 2)
+  scope             PromotionScope
+  targetProductId   String?         @map("target_product_id") @db.Uuid
+  targetCategoryId  String?         @map("target_category_id") @db.Uuid
+  startsAt          DateTime        @map("starts_at") @db.Timestamptz(6)
+  endsAt            DateTime        @map("ends_at") @db.Timestamptz(6)
+  status            PromotionStatus @default(SCHEDULED)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  targetProduct  Product?  @relation("ProductPromotions", fields: [targetProductId], references: [id])
+  targetCategory Category? @relation("CategoryPromotions", fields: [targetCategoryId], references: [id])
+
+  activeOnProducts Product[]          @relation("ActivePromotion")
+  productLinks     ProductPromotion[]
+
+  // Partial indexes (status filter + target_category not null) added in migration SQL.
+  @@index([status, startsAt, endsAt], map: "idx_promotions_status_window")
+  @@map("promotions")
+}
+
+model ProductPromotion {
+  productId   String   @map("product_id") @db.Uuid
+  promotionId String   @map("promotion_id") @db.Uuid
+  appliedAt   DateTime @default(now()) @map("applied_at") @db.Timestamptz(6)
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+
+  @@id([productId, promotionId])
+  @@index([promotionId], map: "idx_product_promotions_promotion")
+  @@map("product_promotions")
+}
+
+model IngestBatch {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vendorId      String    @map("vendor_id")
+  sourceFile    String    @map("source_file")
+  status        String
+  totalRows     Int?      @map("total_rows")
+  processedRows Int       @default(0) @map("processed_rows")
+  failedRows    Int       @default(0) @map("failed_rows")
+  startedAt     DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  rowResults IngestRowResult[]
+
+  @@unique([vendorId, sourceFile], map: "uq_ingest_batches_vendor_file")
+  @@map("ingest_batches")
+}
+
+model IngestRowResult {
+  batchId      String   @map("batch_id") @db.Uuid
+  rowKey       String   @map("row_key")
+  status       String
+  errorMessage String?  @map("error_message")
+  processedAt  DateTime @default(now()) @map("processed_at") @db.Timestamptz(6)
+
+  batch IngestBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@id([batchId, rowKey])
+  @@map("ingest_row_results")
+}
