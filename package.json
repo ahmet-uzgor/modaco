@@ -29,6 +29,7 @@
     "@nestjs/platform-express": "^10.4.4",
     "@nestjs/terminus": "^10.2.3",
     "@prisma/client": "^5.20.0",
+    "csv-parse": "^6.2.1",
     "decimal.js": "^10.6.0",
     "ioredis": "^5.4.1",
     "nestjs-pino": "^4.1.0",

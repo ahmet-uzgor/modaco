@@ -16,6 +16,11 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v === '' ? undefined : v)),
   REDIS_DB: z.coerce.number().int().min(0).default(0),
+
+  // Ingest (Scenario A). INGEST_DIR is the only root allowed for sourceFile
+  // resolution so the API can't be tricked into reading arbitrary paths.
+  INGEST_DIR: z.string().min(1).default('/tmp/modaco-ingest'),
+  INGEST_CHUNK_SIZE: z.coerce.number().int().min(1).max(10_000).default(500),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
