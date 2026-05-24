@@ -53,23 +53,70 @@ export class ProductsService {
     };
   }
 
+  /**
+   * Create a product and — atomically with the insert — pick up any live
+   * CATEGORY-scope promotion that applies to its category (plan §9, B2).
+   *
+   * The whole flow runs in one transaction so a newcomer can never observe
+   * a state where the row exists at base price while a category-wide sale
+   * is in progress. The check for an outranking PRODUCT-level promo is
+   * unnecessary here: the product was just created.
+   */
   async create(dto: CreateProductDto): Promise<ProductPresented> {
     const category = await this.prisma.category.findUnique({ where: { id: dto.categoryId } });
     if (!category) throw new BadRequestException(`Category ${dto.categoryId} does not exist`);
 
-    // Phase 3: no auto-apply of category promotions yet. Effective price = base
-    // price. Phase 4 will wrap this in a transaction that also materializes
-    // the link to any live category-scoped promotion.
     try {
-      const created = await this.prisma.product.create({
-        data: {
-          sku: dto.sku,
-          name: dto.name,
-          categoryId: dto.categoryId,
-          basePrice: new Prisma.Decimal(dto.basePrice),
-          stockQuantity: dto.stockQuantity,
-          effectivePrice: new Prisma.Decimal(dto.basePrice),
-        },
+      const created = await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
+
+        // Find a live CATEGORY-scope promotion on this category. Most-recently
+        // created wins if there were ever two (the conflict rule should
+        // prevent that, but the ORDER BY makes the choice deterministic).
+        const livePromo = await tx.promotion.findFirst({
+          where: {
+            scope: 'CATEGORY',
+            targetCategoryId: dto.categoryId,
+            status: { in: ['ACTIVE', 'SCHEDULED'] },
+            startsAt: { lte: now },
+            endsAt: { gt: now },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        const effective = computeEffectivePrice(
+          dto.basePrice,
+          livePromo
+            ? {
+                discountType: livePromo.discountType,
+                discountValue: livePromo.discountValue.toString(),
+              }
+            : null,
+        );
+
+        const product = await tx.product.create({
+          data: {
+            sku: dto.sku,
+            name: dto.name,
+            categoryId: dto.categoryId,
+            basePrice: new Prisma.Decimal(dto.basePrice),
+            stockQuantity: dto.stockQuantity,
+            effectivePrice: new Prisma.Decimal(effective.toString()),
+            effectivePriceUpdatedAt: now,
+            ...(livePromo ? { activePromotionId: livePromo.id } : {}),
+          },
+        });
+
+        // Always materialize the link row — it's the table Scenario B's
+        // bulk operations key off, and `ON CONFLICT DO NOTHING` keeps the
+        // future apply() call idempotent.
+        if (livePromo) {
+          await tx.productPromotion.create({
+            data: { productId: product.id, promotionId: livePromo.id },
+          });
+        }
+
+        return product;
       });
       return presentProduct(created);
     } catch (err) {
